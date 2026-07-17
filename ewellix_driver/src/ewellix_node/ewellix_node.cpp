@@ -41,6 +41,7 @@ EwellixNode::EwellixNode(const std::string node_name)
   this->declare_parameter("port", "/dev/ttyUSB0");
   this->declare_parameter("baud", 38400);
   this->declare_parameter("timeout", 1000);
+  this->declare_parameter("joint_name", "lift_lower_joint");
   this->declare_parameter("conversion", 3225.0);
   this->declare_parameter("rated_effort", 2000.0);
   this->declare_parameter("tolerance", 0.005);
@@ -53,6 +54,7 @@ EwellixNode::EwellixNode(const std::string node_name)
   this->get_parameter("port", port_);
   this->get_parameter("baud", baud_);
   this->get_parameter("timeout", timeout_);
+  this->get_parameter("joint_name", joint_name_);
   this->get_parameter("conversion", conversion_);
   this->get_parameter("rated_effort", rated_effort_);
   this->get_parameter("tolerance", tolerance_);
@@ -62,7 +64,7 @@ EwellixNode::EwellixNode(const std::string node_name)
 
 
   RCLCPP_INFO(this->get_logger(),
-  "\nParameters:\n  joint_count: %d\n  port: %s\n  baud: %d\n  timeout: %d\n  conversion: %f\n  rated_effort: %f\n  tolerance: %f\n  frequency: %f", joint_count_, port_.c_str(), baud_, timeout_, conversion_, rated_effort_, tolerance_, frequency_
+  "\nParameters:\n  joint_count: %d\n  joint_name: %s\n  port: %s\n  baud: %d\n  timeout: %d\n  conversion: %f\n  rated_effort: %f\n  tolerance: %f\n  frequency: %f", joint_count_, joint_name_.c_str(), port_.c_str(), baud_, timeout_, conversion_, rated_effort_, tolerance_, frequency_
   );
 
   // Initialize Variables
@@ -138,6 +140,7 @@ EwellixNode::EwellixNode(const std::string node_name)
   );
 
   pubState_ = this->create_publisher<ewellix_interfaces::msg::State>("state", 10);
+  pubJointState_ = this->create_publisher<sensor_msgs::msg::JointState>("joint_states", 10);
 
   // Publish loop
   run_timer_ = this->create_wall_timer(
@@ -188,6 +191,13 @@ EwellixNode::run()
     msg_state.errors.push_back(state_.errors[i].code);
   }
   pubState_->publish(msg_state);
+
+  sensor_msgs::msg::JointState msg_joint_state;
+  msg_joint_state.header.stamp = this->now();
+  msg_joint_state.name.push_back(joint_name_);
+  msg_joint_state.position.push_back(
+    static_cast<double>(state_.actual_positions.front()) / conversion_);
+  pubJointState_->publish(msg_joint_state);
 }
 
 /**

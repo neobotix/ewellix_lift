@@ -31,6 +31,7 @@ Parameters:
   - `baud`: Baud rate, on most TLT it should be set to `38400`
   - `timeout`: Timeout in milliseconds to wait for response from SCU. By default, `1000` ms.
   - `joint_count`: Number of actuators. By default, `2`.
+  - `joint_name`: Name used for the joint published on `joint_states`. By default, `lift_lower_joint`.
   - `conversion`: Encoder ticks per meter. Varies depending on lift model. On the 500mm model, `3225` encoder ticks per meter.
   - `rated_effort`: Rated force of lift. On the 500mm model, `2000` N.
   - `tolerance`: Distance from commanded position to consider within bounds. By default `0.005` meters.

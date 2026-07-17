@@ -37,6 +37,7 @@
 #include <chrono>
 #include <thread>
 #include "rclcpp/rclcpp.hpp"
+#include "sensor_msgs/msg/joint_state.hpp"
 #include "std_msgs/msg/int32.hpp"
 #include "ewellix_interfaces/msg/command.hpp"
 #include "ewellix_interfaces/msg/error.hpp"
@@ -88,6 +89,7 @@ private:
   std::string port_;
   int baud_;
   int timeout_;
+  std::string joint_name_;
 
   int joint_count_;
   bool activated_;
@@ -119,6 +121,7 @@ private:
   rclcpp::Publisher<ewellix_interfaces::msg::Error>::SharedPtr pubError_;
   rclcpp::Publisher<ewellix_interfaces::msg::State>::SharedPtr pubState_;
   rclcpp::Publisher<ewellix_interfaces::msg::Status>::SharedPtr pubStatus_;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr pubJointState_;
 };
 
 } // namespace ewellix_driver

@@ -19,6 +19,7 @@
   <depend>neo_msgs2</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
+  <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>serial</depend>
 
