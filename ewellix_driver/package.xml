@@ -16,6 +16,7 @@
   <depend>controller_manager_msgs</depend>
   <depend>ewellix_interfaces</depend>
   <depend>hardware_interface</depend>
+  <depend>neo_msgs2</depend>
   <depend>pluginlib</depend>
   <depend>rclcpp</depend>
   <depend>std_msgs</depend>

@@ -33,12 +33,14 @@
 #ifndef EWELLIX_DRIVER__EWELLIX_HARDWARE_INTERFACE_HPP_
 #define EWELLIX_DRIVER__EWELLIX_HARDWARE_INTERFACE_HPP_
 
+#include <atomic>
 #include <chrono>
 #include <thread>
 
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_lifecycle/node_interfaces/lifecycle_node_interface.hpp"
 #include "rclcpp_lifecycle/lifecycle_publisher.hpp"
+#include "neo_msgs2/msg/emergency_stop_state.hpp"
 #include "std_msgs/msg/string.hpp"
 
 #include "hardware_interface/hardware_info.hpp"
@@ -133,9 +135,14 @@ class EwellixHardwareInterface
   void
   logHeldStateWarning(const std::string& reason);
 
+  void
+  emergencyStopCallback(const neo_msgs2::msg::EmergencyStopState::SharedPtr msg);
+
   protected:
   int joint_count_;
-  bool activated_;
+  std::atomic_bool activated_;
+  std::atomic_bool safety_stop_;
+  std::atomic_bool safety_state_received_;
   bool hold_last_state_on_error_;
   std::chrono::steady_clock::time_point last_held_state_warning_time_;
   std::atomic_bool recovery_in_progress_;
@@ -155,6 +162,8 @@ class EwellixHardwareInterface
   std::atomic_bool async_error_;
   std::atomic_bool async_thread_shutdown_;
   std::shared_ptr<std::thread> async_thread_;
+
+  rclcpp::Subscription<neo_msgs2::msg::EmergencyStopState>::SharedPtr emergency_stop_subscription_;
 
   std::vector<uint8_t> data_;
   EwellixSerial::Cycle2Data state_;

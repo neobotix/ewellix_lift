@@ -13,6 +13,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(ewellix_interfaces REQUIRED)
 find_package(hardware_interface REQUIRED)
+find_package(neo_msgs2 REQUIRED)
 find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_lifecycle REQUIRED)
@@ -24,6 +25,7 @@ include_directories(include)
 set(THIS_PACKAGE_INCLUDE_DEPENDS
   ewellix_interfaces
   hardware_interface
+  neo_msgs2
   pluginlib
   rclcpp
   rclcpp_lifecycle

@@ -59,6 +59,8 @@ EwellixHardwareInterface::on_init(const hardware_interface::HardwareComponentInt
   info_ = params.hardware_info;
   joint_count_ = 0;
   activated_ = false;
+  safety_stop_ = true;
+  safety_state_received_ = false;
   hold_last_state_on_error_ = true;
   last_held_state_warning_time_ = std::chrono::steady_clock::time_point();
   async_error_ = false;
@@ -177,6 +179,13 @@ EwellixHardwareInterface::on_configure(const rclcpp_lifecycle::State& /*previous
 {
   RCLCPP_INFO(rclcpp::get_logger("EwellixHardwareInterface"), "Configuring...");
 
+  if (!emergency_stop_subscription_)
+  {
+    emergency_stop_subscription_ = get_node()->create_subscription<neo_msgs2::msg::EmergencyStopState>(
+      "emergency_stop_state", rclcpp::QoS(1),
+      std::bind(&EwellixHardwareInterface::emergencyStopCallback, this, std::placeholders::_1));
+  }
+
   // Port
   const std::string port = info_.hardware_parameters["port"];
   RCLCPP_INFO(rclcpp::get_logger("EwellixHardwareInterface"), "Port: %s", port.c_str());
@@ -237,6 +246,20 @@ hardware_interface::CallbackReturn
 EwellixHardwareInterface::on_activate(const rclcpp_lifecycle::State& /*previous_state*/)
 {
   RCLCPP_INFO(rclcpp::get_logger("EwellixHardwareInterface"), "Activating...");
+
+  if (!safety_state_received_)
+  {
+    RCLCPP_ERROR(rclcpp::get_logger("EwellixHardwareInterface"),
+                 "Refusing activation: no emergency stop state has been received.");
+    return hardware_interface::CallbackReturn::FAILURE;
+  }
+
+  if (safety_stop_)
+  {
+    RCLCPP_ERROR(rclcpp::get_logger("EwellixHardwareInterface"),
+                 "Refusing activation: emergency stop state is not EMFREE.");
+    return hardware_interface::CallbackReturn::FAILURE;
+  }
 
   // Activate comms with retry logic
   constexpr int max_retries = 5;
@@ -308,13 +331,21 @@ EwellixHardwareInterface::on_deactivate(const rclcpp_lifecycle::State& /*previou
 {
   RCLCPP_INFO(rclcpp::get_logger("EwellixHardwareInterface"), "Deactivating...");
 
+  // Stop the asynchronous command loop before sending the final stop/deactivate sequence.
+  activated_ = false;
+
+  if(!ewellix_serial_->stopAll())
+  {
+    RCLCPP_ERROR_STREAM(rclcpp::get_logger("EwellixHardwareInterface"),
+                        "Failed to stop all actuators while deactivating.");
+  }
+
   // Deactivate Communication
   if(!ewellix_serial_->deactivate())
   {
     RCLCPP_FATAL_STREAM(rclcpp::get_logger("EwellixHardwareInterface"), "Failed to deactivate EwellixSerial remote control.");
     return hardware_interface::CallbackReturn::ERROR;
   }
-  activated_ = false;
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
@@ -416,7 +447,41 @@ EwellixHardwareInterface::read(const rclcpp::Time& /*time*/, const rclcpp::Durat
 hardware_interface::return_type
 EwellixHardwareInterface::write(const rclcpp::Time& /*time*/, const rclcpp::Duration& /*period*/)
 {
+  if (safety_stop_)
+  {
+    // Controller manager deactivates controllers which use this hardware and then transitions
+    // this hardware component to INACTIVE. Reactivation remains an explicit user action.
+    return hardware_interface::return_type::DEACTIVATE;
+  }
   return hardware_interface::return_type::OK;
+}
+
+/**
+ * Track the combined platform emergency state.
+ *
+ * EMSTOP and EMCONFIRMED are both treated as unsafe. Only EMFREE permits activation. The
+ * callback only updates atomic state; serial I/O remains in the hardware lifecycle/control paths.
+ */
+void
+EwellixHardwareInterface::emergencyStopCallback(
+  const neo_msgs2::msg::EmergencyStopState::SharedPtr msg)
+{
+  const bool stop_requested =
+    msg->emergency_state != neo_msgs2::msg::EmergencyStopState::EMFREE;
+  const bool was_stopped = safety_stop_.exchange(stop_requested);
+  safety_state_received_ = true;
+
+  if (stop_requested && !was_stopped)
+  {
+    RCLCPP_ERROR(rclcpp::get_logger("EwellixHardwareInterface"),
+                 "Emergency state %d received; stopping and deactivating the lift.",
+                 msg->emergency_state);
+  }
+  else if (!stop_requested && was_stopped)
+  {
+    RCLCPP_INFO(rclcpp::get_logger("EwellixHardwareInterface"),
+                "Emergency state is EMFREE; manual hardware/controller reactivation is now allowed.");
+  }
 }
 
 /**
@@ -480,6 +545,13 @@ EwellixHardwareInterface::asyncThread()
   {
     if(activated_ && !recovery_in_progress_)
     {
+      if (safety_stop_)
+      {
+        // write() requests the lifecycle transition. Avoid issuing any new movement command while
+        // controller manager processes it.
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        continue;
+      }
       // Update
       if(!updateState())
       {
