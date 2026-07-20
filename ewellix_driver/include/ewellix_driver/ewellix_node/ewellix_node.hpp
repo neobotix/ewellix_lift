@@ -82,7 +82,10 @@ public:
   bool
   attemptRecovery();
 
-  void
+  bool
+  initializeHardware();
+
+  bool
   getInitialState();
 
 private:
@@ -93,6 +96,7 @@ private:
 
   int joint_count_;
   bool activated_;
+  std::atomic_bool hardware_state_valid_;
   std::atomic_bool recovery_in_progress_;
   static constexpr int RECOVERY_DELAY_MS = 2000;
   float conversion_;

@@ -78,59 +78,13 @@ EwellixNode::EwellixNode(const std::string node_name)
   velocities_ = std::vector<double>(joint_count_, 0);
   efforts_ = std::vector<double>(joint_count_, 0);
   activated_ = false;
+  hardware_state_valid_ = false;
   async_error_ = false;
   async_thread_shutdown_ = false;
   recovery_in_progress_ = false;
 
   // Create serial port
   ewellix_serial_ = std::make_unique<EwellixSerial>(port_, baud_, timeout_);
-
-  // Open Serial
-  if(!ewellix_serial_->open())
-  {
-    RCLCPP_FATAL(this->get_logger(), "Failed to open port communication.");
-    exit(1);
-  }
-  RCLCPP_INFO(this->get_logger(), "Successfully opened port.");
-
-  // Activate communication
-  if (!ewellix_serial_->activate())
-  {
-    RCLCPP_INFO(this->get_logger(), "Failed to activate. Trying again...");
-    if (!ewellix_serial_->activate())
-    {
-      RCLCPP_FATAL(this->get_logger(), "Failed to activate remote communication.");
-      exit(1);
-    }
-  }
-  RCLCPP_INFO(this->get_logger(), "Successfully activated remote communication.");
-
-  // Initial Cycle
-  if (!ewellix_serial_->cycle())
-  {
-    RCLCPP_FATAL(this->get_logger(), "Failed to cycle remote communication.");
-    exit(1);
-  }
-  RCLCPP_INFO(this->get_logger(), "Successfully cycled remote communication.");
-
-  // Setup CyclicObject2 to send and receive lift state
-  if (!ewellix_serial_->setCyclicObject2())
-  {
-    RCLCPP_FATAL(this->get_logger(), "Failed to set CyclicObject2.");
-    exit(1);
-  }
-  RCLCPP_INFO(this->get_logger(), "Successfully set CyclicObject2");
-
-  // Get the initial state of the lift
-  getInitialState();
-
-  // Stop to clear movement flags.
-  if (!ewellix_serial_->stopAll())
-  {
-    RCLCPP_FATAL(this->get_logger(), "Failed to stop all actuators.");
-    exit(1);
-  }
-  RCLCPP_INFO(this->get_logger(), "Successfully stopped all actuators.");
 
   // Setup ROS Interfaces
   subCommand_ = this->create_subscription<ewellix_interfaces::msg::Command>(
@@ -146,8 +100,11 @@ EwellixNode::EwellixNode(const std::string node_name)
   run_timer_ = this->create_wall_timer(
     std::chrono::milliseconds(int(1000/frequency_)), std::bind(&EwellixNode::run, this));
 
-  // Start thread
-  activated_ = true;
+  // The lift is intentionally allowed to be unpowered while bringup starts. Perform all serial
+  // initialization in the worker thread so this node can immediately publish a zero joint state.
+  recovery_in_progress_ = true;
+  RCLCPP_INFO(this->get_logger(),
+              "Publishing a zero joint position until lift communication is available.");
 
   async_thread_ = std::make_shared<std::thread>(&EwellixNode::asyncThread, this);
 }
@@ -195,8 +152,10 @@ EwellixNode::run()
   sensor_msgs::msg::JointState msg_joint_state;
   msg_joint_state.header.stamp = this->now();
   msg_joint_state.name.push_back(joint_name_);
-  msg_joint_state.position.push_back(
-    static_cast<double>(state_.actual_positions.front()) / conversion_);
+  const double joint_position = hardware_state_valid_
+    ? static_cast<double>(state_.actual_positions.front()) / conversion_
+    : 0.0;
+  msg_joint_state.position.push_back(joint_position);
   pubJointState_->publish(msg_joint_state);
 }
 
@@ -218,6 +177,7 @@ EwellixNode::updateState()
 
   // Update state from response data
   state_.setFromData(data_);
+  hardware_state_valid_ = true;
 
   return true;
 }
@@ -287,7 +247,19 @@ EwellixNode::asyncThread()
     }
     else if(recovery_in_progress_)
     {
-      // During recovery, sleep to avoid busy-waiting
+      if (initializeHardware())
+      {
+        hardware_state_valid_ = true;
+        recovery_in_progress_ = false;
+        activated_ = true;
+      }
+      else
+      {
+        attemptRecovery();
+      }
+    }
+    else
+    {
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
   }
@@ -317,6 +289,7 @@ EwellixNode::attemptRecovery()
 {
   // Prevent re-entrant recovery and stop normal operations
   activated_ = false;
+  hardware_state_valid_ = false;
   recovery_in_progress_ = true;
   int attempt = 0;
 
@@ -413,6 +386,7 @@ EwellixNode::attemptRecovery()
 
     // === Recovery succeeded ===
     async_error_ = false;
+    hardware_state_valid_ = true;
     recovery_in_progress_ = false;
     activated_ = true;
 
@@ -479,17 +453,64 @@ EwellixNode::convertCommands()
 }
 
 /**
- * Get initial state of the lift
+ * Initialize communication and obtain the initial lift state.
  */
-void
-EwellixNode::getInitialState() 
+bool
+EwellixNode::initializeHardware()
+{
+  if(!ewellix_serial_->open())
+  {
+    RCLCPP_INFO(this->get_logger(), "Lift serial port is not available yet.");
+    return false;
+  }
+  RCLCPP_INFO(this->get_logger(), "Successfully opened port.");
+
+  if (!ewellix_serial_->activate())
+  {
+    RCLCPP_INFO(this->get_logger(), "Lift is not powered or ready for remote communication yet.");
+    return false;
+  }
+  RCLCPP_INFO(this->get_logger(), "Successfully activated remote communication.");
+
+  if (!ewellix_serial_->cycle())
+  {
+    RCLCPP_WARN(this->get_logger(), "Failed to cycle remote communication.");
+    return false;
+  }
+
+  if (!ewellix_serial_->setCyclicObject2())
+  {
+    RCLCPP_WARN(this->get_logger(), "Failed to set CyclicObject2.");
+    return false;
+  }
+
+  if (!getInitialState())
+  {
+    return false;
+  }
+
+  if (!ewellix_serial_->stopAll())
+  {
+    RCLCPP_WARN(this->get_logger(), "Failed to stop all actuators during initialization.");
+    return false;
+  }
+
+  RCLCPP_INFO(this->get_logger(), "Lift communication initialized successfully.");
+  return true;
+}
+
+/**
+ * Get initial state of the lift.
+ */
+bool
+EwellixNode::getInitialState()
 {
   std::vector<int> dummy_positions(joint_count_, 0);
   std::vector<uint8_t> init_data;
   if (!ewellix_serial_->cycle2(dummy_positions, init_data))
   {
-    RCLCPP_FATAL(this->get_logger(), "Failed initial cycle2");
-    exit(1);
+    RCLCPP_WARN(this->get_logger(), "Failed initial cycle2.");
+    return false;
   }
   state_.setFromData(init_data);
 
@@ -497,6 +518,7 @@ EwellixNode::getInitialState()
   {
     position_commands_[i] = state_.actual_positions[i] / conversion_;
   }
+  return true;
 }
 
 /**
